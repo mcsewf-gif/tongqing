@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>通勤时间记录</title>
+  <!-- PWA Web App Manifest 配置 -->
+  <link rel="manifest" href="data:application/manifest+json,{%22name%22:%22通勤记录%22,%22short_name%22:%22通勤%22,%22start_url%22:%22.%22,%22display%22:%22standalone%22,%22background_color%22:%22%23f4f4f9%22,%22theme_color%22:%22%234a90e2%22}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: #f4f4f9; padding: 15px; margin: 0; color: #333; }
+    h2 { text-align: center; margin-top: 10px; margin-bottom: 20px; color: #2c3e50; }
+    
+    .card { background: #fff; padding: 15px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    .form-group { margin-bottom: 12px; display: flex; flex-direction: column; }
+    label { font-size: 14px; font-weight: bold; margin-bottom: 5px; color: #555; }
+    input, select, textarea { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: background-color 0.3s; }
+    
+    /* 颜色标识类 */
+    .bg-yellow { background-color: #fff9c4 !important; }
+    .bg-light-red { background-color: #ffcdd2 !important; }
+    .bg-green { background-color: #c8e6c9 !important; }
+
+    .weekday-display { font-size: 14px; color: #666; margin-top: 4px; font-weight: normal; }
+    button.btn-submit { width: 100%; background-color: #4a90e2; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+    button.btn-submit:active { background-color: #357abd; }
+
+    /* 历史记录列表 */
+    .history-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    .record-item { background: white; border-radius: 8px; padding: 12px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.03); display: flex; flex-direction: column; gap: 6px; }
+    .record-header { display: flex; justify-content: space-between; font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+    .record-details { display: flex; justify-content: space-between; font-size: 14px; }
+    .badge { padding: 3px 8px; border-radius: 4px; font-size: 13px; font-weight: bold; }
+    .record-memo { font-size: 13px; color: #666; font-style: italic; background: #f9f9f9; padding: 4px 8px; border-radius: 4px; }
+    .delete-btn { color: #e74c3c; border: none; background: none; font-size: 12px; cursor: pointer; float: right; }
+  </style>
+</head>
+<body>
+
+  <h2>通勤时间记录</h2>
+
+  <div class="card">
+    <form id="commuteForm">
+      <!-- 日期 & 自动计算星期 -->
+      <div class="form-group">
+        <label for="date">日期 <span id="weekdayDisplay" class="weekday-display"></span></label>
+        <input type="date" id="date" required>
+      </div>
+
+      <!-- 出发时间 -->
+      <div class="form-group">
+        <label for="startTime">出发时间</label>
+        <input type="time" id="startTime" required>
+      </div>
+
+      <!-- 到达时间 -->
+      <div class="form-group">
+        <label for="arrivalTime">到达时间</label>
+        <input type="time" id="arrivalTime" required>
+      </div>
+
+      <!-- 路线选择 -->
+      <div class="form-group">
+        <label for="route">路线</label>
+        <select id="route">
+          <option value="Keele">Keele</option>
+          <option value="400">400</option>
+        </select>
+      </div>
+
+      <!-- 备注 -->
+      <div class="form-group">
+        <label for="memo">备注</label>
+        <input type="text" id="memo" placeholder="可选简短备注...">
+      </div>
+
+      <button type="submit" class="btn-submit">保存记录</button>
+    </form>
+  </div>
+
+  <!-- 历史数据展示 -->
+  <div class="history-title">历史记录</div>
+  <div id="historyList"></div>
+
+  <script>
+    const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+
+    const dateInput = document.getElementById('date');
+    const weekdayDisplay = document.getElementById('weekdayDisplay');
+    const startTimeInput = document.getElementById('startTime');
+    const arrivalTimeInput = document.getElementById('arrivalTime');
+    const form = document.getElementById('commuteForm');
+    const historyList = document.getElementById('historyList');
+
+    // 初始化默认当天日期
+    const today = new Date().toISOString().split('T')[0];
+    dateInput.value = today;
+    updateWeekday(today);
+
+    // 监听日期变化更新星期
+    dateInput.addEventListener('change', (e) => {
+      updateWeekday(e.target.value);
+    });
+
+    function updateWeekday(dateStr) {
+      if (!dateStr) {
+        weekdayDisplay.textContent = "";
+        return;
+      }
+      const dateObj = new Date(dateStr + "T00:00:00");
+      const dayName = weekdays[dateObj.getDay()];
+      weekdayDisplay.textContent = `(${dayName})`;
+    }
+
+    // 出发时间颜色逻辑
+    startTimeInput.addEventListener('input', () => {
+      const val = startTimeInput.value; // HH:MM 格式
+      startTimeInput.classList.remove('bg-yellow', 'bg-light-red');
+      if (val >= "06:55" && val <= "06:59") {
+        startTimeInput.classList.add('bg-yellow');
+      } else if (val >= "07:00") {
+        startTimeInput.classList.add('bg-light-red');
+      }
+    });
+
+    // 到达时间颜色逻辑
+    arrivalTimeInput.addEventListener('input', () => {
+      const val = arrivalTimeInput.value; // HH:MM 格式
+      arrivalTimeInput.classList.remove('bg-green', 'bg-light-red');
+      if (val < "08:05") {
+        arrivalTimeInput.classList.add('bg-green');
+      } else if (val >= "08:05") {
+        arrivalTimeInput.classList.add('bg-light-red');
+      }
+    });
+
+    // 颜色类名辅助工具
+    function getStartBgClass(val) {
+      if (val >= "06:55" && val <= "06:59") return 'bg-yellow';
+      if (val >= "07:00") return 'bg-light-red';
+      return '';
+    }
+
+    function getArrivalBgClass(val) {
+      if (val < "08:05") return 'bg-green';
+      if (val >= "08:05") return 'bg-light-red';
+      return '';
+    }
+
+    // 读取本地存储并显示
+    function loadRecords() {
+      const records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
+      historyList.innerHTML = '';
+      
+      // 按日期倒序排列（最近的在上面）
+      records.sort((a, b) => new Date(b.date + 'T' + b.startTime) - new Date(a.date + 'T' + a.startTime));
+
+      records.forEach((record, index) => {
+        const dateObj = new Date(record.date + "T00:00:00");
+        const dayName = weekdays[dateObj.getDay()];
+        
+        const item = document.createElement('div');
+        item.className = 'record-item';
+        item.innerHTML = `
+          <div class="record-header">
+            <span>${record.date} ${dayName}</span>
+            <span>路线: ${record.route}</span>
+          </div>
+          <div class="record-details">
+            <span>出发: <span class="badge ${getStartBgClass(record.startTime)}">${record.startTime}</span></span>
+            <span>到达: <span class="badge ${getArrivalBgClass(record.arrivalTime)}">${record.arrivalTime}</span></span>
+          </div>
+          ${record.memo ? `<div class="record-memo">备注: ${record.memo}</div>` : ''}
+          <div>
+            <button class="delete-btn" onclick="deleteRecord(${index})">删除</button>
+          </div>
+        `;
+        historyList.appendChild(item);
+      });
+    }
+
+    // 保存提交
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      
+      const newRecord = {
+        date: dateInput.value,
+        startTime: startTimeInput.value,
+        arrivalTime: arrivalTimeInput.value,
+        route: document.getElementById('route').value,
+        memo: document.getElementById('memo').value
+      };
+
+      const records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
+      records.push(newRecord);
+      localStorage.setItem('commuteRecords', JSON.stringify(records));
+
+      // 重置表单输入（保留日期和路线）
+      startTimeInput.value = '';
+      arrivalTimeInput.value = '';
+      document.getElementById('memo').value = '';
+      startTimeInput.classList.remove('bg-yellow', 'bg-light-red');
+      arrivalTimeInput.classList.remove('bg-green', 'bg-light-red');
+
+      loadRecords();
+    });
+
+    // 删除记录
+    window.deleteRecord = function(index) {
+      let records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
+      // 注意：由于上面有排序，按原索引删除需要重新按倒序匹配
+      records.sort((a, b) => new Date(b.date + 'T' + b.startTime) - new Date(a.date + 'T' + a.startTime));
+      records.splice(index, 1);
+      localStorage.setItem('commuteRecords', JSON.stringify(records));
+      loadRecords();
+    }
+
+    // 注册简单的 Service Worker (支持 PWA 离线运行)
+    if ('serviceWorker' in navigator) {
+      const swCode = `
+        self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+        self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+        self.addEventListener('fetch', e => e.respondWith(fetch(e.request).catch(() => caches.match(e.request))));
+      `;
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(blob));
+    }
+
+    // 页面加载完成后加载数据
+    loadRecords();
+  </script>
+</body>
+</html>
