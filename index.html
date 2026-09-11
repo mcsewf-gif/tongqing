@@ -8,6 +8,12 @@
   <link rel="manifest" href="data:application/manifest+json,{%22name%22:%22通勤记录%22,%22short_name%22:%22通勤%22,%22start_url%22:%22.%22,%22display%22:%22standalone%22,%22background_color%22:%22%23f4f4f9%22,%22theme_color%22:%22%234a90e2%22}">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  
+  <!-- 引入 SheetJS 用于导出 Excel -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- 引入 Chart.js 用于绘制柱形图 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <style>
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     body { background-color: #f4f4f9; padding: 15px; margin: 0; color: #333; }
@@ -27,8 +33,17 @@
     button.btn-submit { width: 100%; background-color: #4a90e2; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
     button.btn-submit:active { background-color: #357abd; }
 
+    /* 按钮组样式 */
+    .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; }
+    .btn-export { background-color: #27ae60; color: white; border: none; padding: 10px 15px; font-size: 14px; border-radius: 8px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+    .btn-export:active { background-color: #219150; }
+
+    /* 图表容器 */
+    .chart-container { position: relative; width: 100%; max-height: 260px; margin-top: 10px; }
+    .stats-summary { font-size: 13px; color: #666; text-align: center; margin-bottom: 8px; }
+
     /* 历史记录列表 */
-    .history-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    .history-title { font-size: 18px; font-weight: bold; }
     .record-item { background: white; border-radius: 8px; padding: 12px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.03); display: flex; flex-direction: column; gap: 6px; }
     .record-header { display: flex; justify-content: space-between; font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 6px; }
     .record-details { display: flex; justify-content: space-between; font-size: 14px; }
@@ -80,8 +95,20 @@
     </form>
   </div>
 
-  <!-- 历史数据展示 -->
-  <div class="history-title">历史记录</div>
+  <!-- 迟到/晚到分析柱形图 -->
+  <div class="card">
+    <div style="font-weight: bold; font-size: 16px; margin-bottom: 5px; color: #c0392b;">⚠️ 8:05及以后到达路线统计</div>
+    <div id="statsSummary" class="stats-summary">正在统计数据...</div>
+    <div class="chart-container">
+      <canvas id="lateRouteChart"></canvas>
+    </div>
+  </div>
+
+  <!-- 历史记录与导出按钮 -->
+  <div class="action-bar">
+    <div class="history-title">历史记录</div>
+    <button class="btn-export" onclick="exportToExcel()">📊 导出 Excel</button>
+  </div>
   <div id="historyList"></div>
 
   <script>
@@ -93,6 +120,9 @@
     const arrivalTimeInput = document.getElementById('arrivalTime');
     const form = document.getElementById('commuteForm');
     const historyList = document.getElementById('historyList');
+    const statsSummary = document.getElementById('statsSummary');
+
+    let lateChart = null;
 
     // 初始化默认当天日期
     const today = new Date().toISOString().split('T')[0];
@@ -116,7 +146,7 @@
 
     // 出发时间颜色逻辑
     startTimeInput.addEventListener('input', () => {
-      const val = startTimeInput.value; // HH:MM 格式
+      const val = startTimeInput.value;
       startTimeInput.classList.remove('bg-yellow', 'bg-light-red');
       if (val >= "06:55" && val <= "06:59") {
         startTimeInput.classList.add('bg-yellow');
@@ -127,7 +157,7 @@
 
     // 到达时间颜色逻辑
     arrivalTimeInput.addEventListener('input', () => {
-      const val = arrivalTimeInput.value; // HH:MM 格式
+      const val = arrivalTimeInput.value;
       arrivalTimeInput.classList.remove('bg-green', 'bg-light-red');
       if (val < "08:05") {
         arrivalTimeInput.classList.add('bg-green');
@@ -147,6 +177,68 @@
       if (val < "08:05") return 'bg-green';
       if (val >= "08:05") return 'bg-light-red';
       return '';
+    }
+
+    // 更新柱形图统计
+    function updateChart(records) {
+      let keeleCount = 0;
+      let route400Count = 0;
+
+      records.forEach(r => {
+        // 筛选到达时间在 08:05 及以后的记录
+        if (r.arrivalTime >= "08:05") {
+          if (r.route === "Keele") keeleCount++;
+          else if (r.route === "400") route400Count++;
+        }
+      });
+
+      const totalLate = keeleCount + route400Count;
+      if (totalLate === 0) {
+        statsSummary.textContent = "暂无 8:05 及以后到达的记录";
+      } else {
+        statsSummary.textContent = `共 ${totalLate} 次晚于 8:05 到达（Keele: ${keeleCount}次，400: ${route400Count}次）`;
+      }
+
+      const ctx = document.getElementById('lateRouteChart').getContext('2d');
+
+      if (lateChart) {
+        lateChart.data.datasets[0].data = [keeleCount, route400Count];
+        lateChart.update();
+      } else {
+        lateChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: ['Keele', '400'],
+            datasets: [{
+              label: '8:05及以后到达次数',
+              data: [keeleCount, route400Count],
+              backgroundColor: [
+                'rgba(231, 76, 60, 0.7)',  // 红色 - Keele
+                'rgba(52, 152, 219, 0.7)'   // 蓝色 - 400
+              ],
+              borderColor: [
+                'rgba(231, 76, 60, 1)',
+                'rgba(52, 152, 219, 1)'
+              ],
+              borderWidth: 1.5,
+              borderRadius: 6
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: { stepSize: 1, precision: 0 }
+              }
+            }
+          }
+        });
+      }
     }
 
     // 读取本地存储并显示
@@ -179,6 +271,9 @@
         `;
         historyList.appendChild(item);
       });
+
+      // 更新统计图表
+      updateChart(records);
     }
 
     // 保存提交
@@ -210,11 +305,44 @@
     // 删除记录
     window.deleteRecord = function(index) {
       let records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
-      // 注意：由于上面有排序，按原索引删除需要重新按倒序匹配
       records.sort((a, b) => new Date(b.date + 'T' + b.startTime) - new Date(a.date + 'T' + a.startTime));
       records.splice(index, 1);
       localStorage.setItem('commuteRecords', JSON.stringify(records));
       loadRecords();
+    }
+
+    // 导出 Excel 功能
+    window.exportToExcel = function() {
+      const records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
+      if (records.length === 0) {
+        alert("暂无记录可导出！");
+        return;
+      }
+
+      // 排序（按日期升序导出）
+      records.sort((a, b) => new Date(a.date + 'T' + a.startTime) - new Date(b.date + 'T' + b.startTime));
+
+      // 转换为 Excel 格式数组
+      const excelData = records.map(r => {
+        const dateObj = new Date(r.date + "T00:00:00");
+        const dayName = weekdays[dateObj.getDay()];
+        return {
+          "日期": r.date,
+          "星期": dayName,
+          "出发时间": r.startTime,
+          "到达时间": r.arrivalTime,
+          "路线": r.route,
+          "是否8:05及以后到达": r.arrivalTime >= "08:05" ? "是" : "否",
+          "备注": r.memo || ""
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "通勤记录");
+
+      // 触发下载
+      XLSX.writeFile(workbook, `通勤时间记录_${new Date().toISOString().split('T')[0]}.xlsx`);
     }
 
     // 注册简单的 Service Worker (支持 PWA 离线运行)
@@ -233,3 +361,4 @@
   </script>
 </body>
 </html>
+
