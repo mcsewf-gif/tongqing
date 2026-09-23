@@ -24,6 +24,11 @@
     label { font-size: 14px; font-weight: bold; margin-bottom: 5px; color: #555; }
     input, select, textarea { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: background-color 0.3s; }
     
+    .route-select-group { display: flex; gap: 8px; align-items: center; }
+    .route-select-group select { flex: 1; }
+    .btn-add-route { background-color: #4a90e2; color: white; border: none; padding: 10px 14px; font-size: 14px; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+    .btn-add-route:active { background-color: #357abd; }
+
     /* 颜色标识类 */
     .bg-yellow { background-color: #fff9c4 !important; }
     .bg-light-red { background-color: #ffcdd2 !important; }
@@ -77,13 +82,13 @@
         <input type="time" id="arrivalTime" required>
       </div>
 
-      <!-- 路线选择 -->
+      <!-- 路线选择与新增路线按钮 -->
       <div class="form-group">
         <label for="route">路线</label>
-        <select id="route">
-          <option value="Keele">Keele</option>
-          <option value="400">400</option>
-        </select>
+        <div class="route-select-group">
+          <select id="route"></select>
+          <button type="button" class="btn-add-route" onclick="addNewRoute()">+ 新增路线</button>
+        </div>
       </div>
 
       <!-- 备注 -->
@@ -113,7 +118,17 @@
   <div id="historyList"></div>
 
   <script>
-    // 自定义 Chart.js 插件：将每次出发时间精准绘制在对应刻度（第1次、第2次、第3次...）的高度中心
+    // 预设颜色池，方便为动态新增的路线分配柱状图颜色
+    const chartColors = [
+      { bg: 'rgba(231, 76, 60, 0.7)', border: 'rgba(231, 76, 60, 1)' },   // 红色 - Keele
+      { bg: 'rgba(52, 152, 219, 0.7)', border: 'rgba(52, 152, 219, 1)' },  // 蓝色 - 400
+      { bg: 'rgba(155, 89, 182, 0.7)', border: 'rgba(155, 89, 182, 1)' },  // 紫色
+      { bg: 'rgba(230, 126, 34, 0.7)', border: 'rgba(230, 126, 34, 1)' },  // 橙色
+      { bg: 'rgba(46, 204, 113, 0.7)', border: 'rgba(46, 204, 113, 1)' },  // 绿色
+      { bg: 'rgba(241, 196, 15, 0.7)', border: 'rgba(241, 196, 15, 1)' }   // 黄色
+    ];
+
+    // 自定义 Chart.js 插件：将每次出发时间精准绘制在对应刻度的高度中心
     const barLabelsPlugin = {
       id: 'barLabelsPlugin',
       afterDatasetsDraw(chart) {
@@ -134,7 +149,6 @@
 
           const yAxis = chart.scales.y;
 
-          // 依次计算第 1 次、第 2 次... 柱块在 Y 轴上的中心点坐标
           times.forEach((timeStr, i) => {
             const yTop = yAxis.getPixelForValue(i + 1);
             const yBottom = yAxis.getPixelForValue(i);
@@ -156,11 +170,54 @@
     const weekdayDisplay = document.getElementById('weekdayDisplay');
     const startTimeInput = document.getElementById('startTime');
     const arrivalTimeInput = document.getElementById('arrivalTime');
+    const routeSelect = document.getElementById('route');
     const form = document.getElementById('commuteForm');
     const historyList = document.getElementById('historyList');
     const statsSummary = document.getElementById('statsSummary');
 
     let lateChart = null;
+
+    // 初始化路线列表（支持从 localStorage 读取）
+    function loadRoutes() {
+      let savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '[]');
+      if (savedRoutes.length === 0) {
+        savedRoutes = ['Keele', '400'];
+        localStorage.setItem('commuteRoutes', JSON.stringify(savedRoutes));
+      }
+
+      const currentSelected = routeSelect.value;
+      routeSelect.innerHTML = '';
+      savedRoutes.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        routeSelect.appendChild(opt);
+      });
+
+      if (currentSelected && savedRoutes.includes(currentSelected)) {
+        routeSelect.value = currentSelected;
+      }
+    }
+
+    // 添加新路线
+    window.addNewRoute = function() {
+      const newRoute = prompt("请输入新路线名称（例如：Hwy 427、Yonge等）：");
+      if (!newRoute) return;
+      const trimmed = newRoute.trim();
+      if (!trimmed) return;
+
+      let savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '["Keele", "400"]');
+      if (savedRoutes.includes(trimmed)) {
+        alert("该路线已存在！");
+        routeSelect.value = trimmed;
+        return;
+      }
+
+      savedRoutes.push(trimmed);
+      localStorage.setItem('commuteRoutes', JSON.stringify(savedRoutes));
+      loadRoutes();
+      routeSelect.value = trimmed;
+    };
 
     // 初始化默认当天日期
     const today = new Date().toISOString().split('T')[0];
@@ -217,58 +274,70 @@
       return '';
     }
 
-    // 更新柱形图统计
+    // 动态更新柱形图统计
     function updateChart(records) {
-      let keeleCount = 0;
-      let route400Count = 0;
-      let keeleStartTimes = [];
-      let route400StartTimes = [];
+      const savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '["Keele", "400"]');
+      
+      // 初始化每条路线的数据集
+      const routeCounts = {};
+      const routeStartTimes = {};
+      savedRoutes.forEach(r => {
+        routeCounts[r] = 0;
+        routeStartTimes[r] = [];
+      });
 
-      // 按时间由早到晚排序，确保第1次对应底部的0-1格
+      // 筛选 8:05 及以后到达记录并按时间升序
       const lateRecords = records
         .filter(r => r.arrivalTime >= "08:05")
         .sort((a, b) => new Date(a.date + 'T' + a.startTime) - new Date(b.date + 'T' + b.startTime));
 
       lateRecords.forEach(r => {
-        if (r.route === "Keele") {
-          keeleCount++;
-          keeleStartTimes.push(r.startTime);
-        } else if (r.route === "400") {
-          route400Count++;
-          route400StartTimes.push(r.startTime);
+        if (!routeCounts.hasOwnProperty(r.route)) {
+          routeCounts[r.route] = 0;
+          routeStartTimes[r.route] = [];
+          if (!savedRoutes.includes(r.route)) savedRoutes.push(r.route);
         }
+        routeCounts[r.route]++;
+        routeStartTimes[r.route].push(r.startTime);
       });
 
-      const totalLate = keeleCount + route400Count;
+      const totalLate = lateRecords.length;
       if (totalLate === 0) {
         statsSummary.textContent = "暂无 8:05 及以后到达的记录";
       } else {
-        statsSummary.textContent = `共 ${totalLate} 次晚于 8:05 到达（Keele: ${keeleCount}次，400: ${route400Count}次）`;
+        const detailsStr = savedRoutes
+          .map(r => `${r}: ${routeCounts[r]}次`)
+          .join('，');
+        statsSummary.textContent = `共 ${totalLate} 次晚于 8:05 到达（${detailsStr}）`;
       }
+
+      const labels = savedRoutes;
+      const dataValues = savedRoutes.map(r => routeCounts[r]);
+      const startTimesValues = savedRoutes.map(r => routeStartTimes[r]);
+      
+      const bgColors = savedRoutes.map((_, idx) => chartColors[idx % chartColors.length].bg);
+      const borderColors = savedRoutes.map((_, idx) => chartColors[idx % chartColors.length].border);
 
       const ctx = document.getElementById('lateRouteChart').getContext('2d');
 
       if (lateChart) {
-        lateChart.data.datasets[0].data = [keeleCount, route400Count];
-        lateChart.data.datasets[0].startTimes = [keeleStartTimes, route400StartTimes];
+        lateChart.data.labels = labels;
+        lateChart.data.datasets[0].data = dataValues;
+        lateChart.data.datasets[0].startTimes = startTimesValues;
+        lateChart.data.datasets[0].backgroundColor = bgColors;
+        lateChart.data.datasets[0].borderColor = borderColors;
         lateChart.update();
       } else {
         lateChart = new Chart(ctx, {
           type: 'bar',
           data: {
-            labels: ['Keele', '400'],
+            labels: labels,
             datasets: [{
               label: '8:05及以后到达次数',
-              data: [keeleCount, route400Count],
-              startTimes: [keeleStartTimes, route400StartTimes],
-              backgroundColor: [
-                'rgba(231, 76, 60, 0.7)',  // 红色 - Keele
-                'rgba(52, 152, 219, 0.7)'   // 蓝色 - 400
-              ],
-              borderColor: [
-                'rgba(231, 76, 60, 1)',
-                'rgba(52, 152, 219, 1)'
-              ],
+              data: dataValues,
+              startTimes: startTimesValues,
+              backgroundColor: bgColors,
+              borderColor: borderColors,
               borderWidth: 1.5,
               borderRadius: 6
             }]
@@ -321,7 +390,8 @@
         historyList.appendChild(item);
       });
 
-      // 更新统计图表
+      // 更新路线下拉列表及统计图表
+      loadRoutes();
       updateChart(records);
     }
 
@@ -333,7 +403,7 @@
         date: dateInput.value,
         startTime: startTimeInput.value,
         arrivalTime: arrivalTimeInput.value,
-        route: document.getElementById('route').value,
+        route: routeSelect.value,
         memo: document.getElementById('memo').value
       };
 
