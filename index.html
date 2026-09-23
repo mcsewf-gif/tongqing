@@ -28,6 +28,8 @@
     .route-select-group select { flex: 1; }
     .btn-add-route { background-color: #4a90e2; color: white; border: none; padding: 10px 10px; font-size: 13px; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
     .btn-add-route:active { background-color: #357abd; }
+    .btn-manage-route { background-color: #7f8c8d; color: white; border: none; padding: 10px 10px; font-size: 13px; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+    .btn-manage-route:active { background-color: #626d6e; }
 
     /* 颜色标识类 */
     .bg-yellow { background-color: #fff9c4 !important; }
@@ -56,6 +58,18 @@
     .badge { padding: 3px 8px; border-radius: 4px; font-size: 13px; font-weight: bold; }
     .record-memo { font-size: 13px; color: #666; font-style: italic; background: #f9f9f9; padding: 4px 8px; border-radius: 4px; }
     .delete-btn { color: #e74c3c; border: none; background: none; font-size: 12px; cursor: pointer; float: right; }
+
+    /* 路线管理弹窗样式 */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+    .modal-card { background: #fff; width: 90%; max-width: 400px; padding: 20px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
+    .modal-header h3 { margin: 0; font-size: 18px; color: #2c3e50; }
+    .close-modal { border: none; background: none; font-size: 20px; cursor: pointer; color: #888; }
+    .modal-route-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #eee; }
+    .modal-route-item span { font-weight: bold; color: #333; }
+    .modal-btn-group { display: flex; gap: 6px; }
+    .btn-edit-sm { background-color: #f39c12; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+    .btn-del-sm { background-color: #e74c3c; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -82,12 +96,13 @@
         <input type="time" id="arrivalTime" required>
       </div>
 
-      <!-- 路线选择与新增路线按钮 -->
+      <!-- 路线选择与新增/管理路线按钮 -->
       <div class="form-group">
         <label for="route">路线</label>
         <div class="route-select-group">
           <select id="route"></select>
           <button type="button" class="btn-add-route" onclick="addNewRoute()">+ 新增</button>
+          <button type="button" class="btn-manage-route" onclick="openRouteModal()">⚙️ 管理</button>
         </div>
       </div>
 
@@ -116,6 +131,17 @@
     <button class="btn-export" onclick="exportToExcel()">📊 导出 Excel</button>
   </div>
   <div id="historyList"></div>
+
+  <!-- 路线管理弹窗 -->
+  <div id="routeModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>管理路线</h3>
+        <button class="close-modal" onclick="closeRouteModal()">&times;</button>
+      </div>
+      <div id="modalRouteList"></div>
+    </div>
+  </div>
 
   <script>
     // 预设颜色池，方便为动态新增的路线分配柱状图颜色
@@ -174,6 +200,8 @@
     const form = document.getElementById('commuteForm');
     const historyList = document.getElementById('historyList');
     const statsSummary = document.getElementById('statsSummary');
+    const routeModal = document.getElementById('routeModal');
+    const modalRouteList = document.getElementById('modalRouteList');
 
     let lateChart = null;
 
@@ -201,7 +229,7 @@
 
     // 添加新路线
     window.addNewRoute = function() {
-      const newRoute = prompt("请输入新路线名称（例如：Hwy 427、Yonge等）：");
+      const newRoute = prompt("请输入新路线名称（例如：Yonge等）：");
       if (!newRoute) return;
       const trimmed = newRoute.trim();
       if (!trimmed) return;
@@ -217,6 +245,88 @@
       localStorage.setItem('commuteRoutes', JSON.stringify(savedRoutes));
       loadRoutes();
       routeSelect.value = trimmed;
+    };
+
+    // 路线管理弹窗逻辑
+    window.openRouteModal = function() {
+      renderModalRouteList();
+      routeModal.style.display = 'flex';
+    };
+
+    window.closeRouteModal = function() {
+      routeModal.style.display = 'none';
+    };
+
+    function renderModalRouteList() {
+      let savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '["Keele", "400"]');
+      modalRouteList.innerHTML = '';
+
+      if (savedRoutes.length === 0) {
+        modalRouteList.innerHTML = '<div style="color:#888; text-align:center; padding:10px;">暂无路线</div>';
+        return;
+      }
+
+      savedRoutes.forEach((r, idx) => {
+        const div = document.createElement('div');
+        div.className = 'modal-route-item';
+        div.innerHTML = `
+          <span>${r}</span>
+          <div class="modal-btn-group">
+            <button class="btn-edit-sm" onclick="editRouteName(${idx})">修改</button>
+            <button class="btn-del-sm" onclick="deleteRouteItem(${idx})">删除</button>
+          </div>
+        `;
+        modalRouteList.appendChild(div);
+      });
+    }
+
+    // 修改路线名称（同步更新历史记录中的路线名）
+    window.editRouteName = function(index) {
+      let savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '[]');
+      const oldName = savedRoutes[index];
+      const newName = prompt(`将路线 "${oldName}" 修改为：`, oldName);
+      
+      if (!newName) return;
+      const trimmed = newName.trim();
+      if (!trimmed || trimmed === oldName) return;
+
+      if (savedRoutes.includes(trimmed)) {
+        alert("已存在同名路线！");
+        return;
+      }
+
+      // 1. 更新路线数组
+      savedRoutes[index] = trimmed;
+      localStorage.setItem('commuteRoutes', JSON.stringify(savedRoutes));
+
+      // 2. 同步更新历史记录中的对应路线名称
+      let records = JSON.parse(localStorage.getItem('commuteRecords') || '[]');
+      records.forEach(rec => {
+        if (rec.route === oldName) {
+          rec.route = trimmed;
+        }
+      });
+      localStorage.setItem('commuteRecords', JSON.stringify(records));
+
+      // 3. 刷新页面数据和弹窗列表
+      renderModalRouteList();
+      loadRecords();
+    };
+
+    // 删除路线
+    window.deleteRouteItem = function(index) {
+      let savedRoutes = JSON.parse(localStorage.getItem('commuteRoutes') || '[]');
+      const name = savedRoutes[index];
+
+      if (!confirm(`确定要删除路线 "${name}" 吗？\n（注：历史记录中已保存的该路线数据不会被删除）`)) {
+        return;
+      }
+
+      savedRoutes.splice(index, 1);
+      localStorage.setItem('commuteRoutes', JSON.stringify(savedRoutes));
+
+      renderModalRouteList();
+      loadRecords();
     };
 
     // 初始化默认当天日期
