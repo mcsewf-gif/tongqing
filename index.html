@@ -11,9 +11,8 @@
   
   <!-- 引入 SheetJS 用于导出 Excel -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <!-- 引入 Chart.js 及 DataLabels 插件 用于柱形图标注出发时间 -->
+  <!-- 引入 Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 
   <style>
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
@@ -114,8 +113,42 @@
   <div id="historyList"></div>
 
   <script>
-    // 注册 Chart.js DataLabels 插件
-    Chart.register(ChartDataLabels);
+    // 自定义 Chart.js 插件：将每次出发时间精准绘制在对应刻度（第1次、第2次、第3次...）的高度中心
+    const barLabelsPlugin = {
+      id: 'barLabelsPlugin',
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        const dataset = chart.data.datasets[0];
+        const timesData = dataset.startTimes || [];
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+        meta.data.forEach((bar, index) => {
+          const times = timesData[index] || [];
+          if (times.length === 0) return;
+
+          const yAxis = chart.scales.y;
+
+          // 依次计算第 1 次、第 2 次... 柱块在 Y 轴上的中心点坐标
+          times.forEach((timeStr, i) => {
+            const yTop = yAxis.getPixelForValue(i + 1);
+            const yBottom = yAxis.getPixelForValue(i);
+            const yCenter = (yTop + yBottom) / 2;
+
+            ctx.fillText(timeStr, bar.x, yCenter);
+          });
+        });
+
+        ctx.restore();
+      }
+    };
+
+    Chart.register(barLabelsPlugin);
 
     const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 
@@ -191,16 +224,18 @@
       let keeleStartTimes = [];
       let route400StartTimes = [];
 
-      records.forEach(r => {
-        // 筛选到达时间在 08:05 及以后的记录
-        if (r.arrivalTime >= "08:05") {
-          if (r.route === "Keele") {
-            keeleCount++;
-            keeleStartTimes.push(r.startTime);
-          } else if (r.route === "400") {
-            route400Count++;
-            route400StartTimes.push(r.startTime);
-          }
+      // 按时间由早到晚排序，确保第1次对应底部的0-1格
+      const lateRecords = records
+        .filter(r => r.arrivalTime >= "08:05")
+        .sort((a, b) => new Date(a.date + 'T' + a.startTime) - new Date(b.date + 'T' + b.startTime));
+
+      lateRecords.forEach(r => {
+        if (r.route === "Keele") {
+          keeleCount++;
+          keeleStartTimes.push(r.startTime);
+        } else if (r.route === "400") {
+          route400Count++;
+          route400StartTimes.push(r.startTime);
         }
       });
 
@@ -211,15 +246,11 @@
         statsSummary.textContent = `共 ${totalLate} 次晚于 8:05 到达（Keele: ${keeleCount}次，400: ${route400Count}次）`;
       }
 
-      const keeleLabelText = keeleStartTimes.length > 0 ? keeleStartTimes.join("\n") : "";
-      const route400LabelText = route400StartTimes.length > 0 ? route400StartTimes.join("\n") : "";
-      const labelTexts = [keeleLabelText, route400LabelText];
-
       const ctx = document.getElementById('lateRouteChart').getContext('2d');
 
       if (lateChart) {
         lateChart.data.datasets[0].data = [keeleCount, route400Count];
-        lateChart.data.datasets[0].customLabels = labelTexts;
+        lateChart.data.datasets[0].startTimes = [keeleStartTimes, route400StartTimes];
         lateChart.update();
       } else {
         lateChart = new Chart(ctx, {
@@ -229,7 +260,7 @@
             datasets: [{
               label: '8:05及以后到达次数',
               data: [keeleCount, route400Count],
-              customLabels: labelTexts,
+              startTimes: [keeleStartTimes, route400StartTimes],
               backgroundColor: [
                 'rgba(231, 76, 60, 0.7)',  // 红色 - Keele
                 'rgba(52, 152, 219, 0.7)'   // 蓝色 - 400
@@ -246,20 +277,7 @@
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-              legend: { display: false },
-              datalabels: {
-                anchor: 'center',
-                align: 'center',
-                color: '#ffffff',
-                font: {
-                  weight: 'bold',
-                  size: 14
-                },
-                formatter: function(value, context) {
-                  if (value === 0) return '';
-                  return context.dataset.customLabels[context.dataIndex];
-                }
-              }
+              legend: { display: false }
             },
             scales: {
               y: {
